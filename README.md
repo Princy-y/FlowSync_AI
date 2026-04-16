@@ -78,5 +78,19 @@ This ensures **accurate, context-aware responses** instead of generic AI output.
 
 ```bash
 git clone https://github.com/Princy-y/FlowSync_AI.git
+```
+Install the dependencies:
+```bash
 cd FlowSync_AI
 npm install
+```
+Create .env file:
+```bash
+VITE_GEMINI_API_KEY=your_api_key_here
+```
+Boot up the system:
+```bash
+npm run dev
+```
+
+
