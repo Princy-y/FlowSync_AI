@@ -75,7 +75,7 @@ This ensures **accurate, context-aware responses** instead of generic AI output.
 ---
 
 ## Quick Start
-
+Clone the repository:
 ```bash
 git clone https://github.com/Princy-y/FlowSync_AI.git
 ```
