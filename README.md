@@ -1,16 +1,82 @@
-# React + Vite
+<div align="center">
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+# FlowSync AI
+**The Autonomous Stadium Operating System**
 
-Currently, two official plugins are available:
+[![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://reactjs.org/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-38B2AC?style=for-the-badge&logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
+[![Google Gemini API](https://img.shields.io/badge/Gemini_AI-8E75B2?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
+[![Vite](https://img.shields.io/badge/Vite-B73BFE?style=for-the-badge&logo=vite&logoColor=FFD62E)](https://vitejs.dev/)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+*Predict congestion before it happens. Route crowds intelligently. Monetize the flow.*
 
-## React Compiler
+</div>
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+---
 
-## Expanding the ESLint configuration
+## The Challenge
+Static stadium systems fail during high-density crowd movement. When thousands exit simultaneously, delays can turn into dangerous congestion. Existing solutions react too late — they don’t predict or adapt in real time.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+---
+
+## The "Mic Drop" Capabilities
+
+* **Predictive Decision Engine**  
+  Forecasts crowd congestion at T+5 and T+10 minutes using trend analysis.
+
+* **What-If Simulation Engine**  
+  Allows users to simulate future scenarios and make proactive decisions.
+
+* **Crowd Voting Intelligence**  
+  Real-time, Waze-style crowd reporting system with confidence scoring.
+
+* **Auto-ReRouting AI System**  
+  Dynamically updates routes when congestion spikes — no user input required.
+
+* **Personalized Smart Modes**  
+  Adapts routing for Fastest, Family, Group, and Elderly users.
+  
+* **Smart Vendor Perks System**  
+  Incentivizes safer routes using targeted discounts — turning safety into revenue.
+
+* **Confidence & Trust Layer**  
+  Prevents misleading data with smart validation and reliability indicators.
+
+---
+
+## Technical Architecture
+
+FlowSync AI uses a **Hybrid Intelligence Model**:
+
+- System Logic → Handles calculations, predictions, routing  
+- AI (Gemini) → Provides human-like explanations and guidance  
+
+### Hidden Context Payload
+
+Each AI request includes structured live data:
+
+- Gate densities  
+- Trends (increasing/decreasing)  
+- Risk levels  
+- User mode  
+- Language preference  
+
+This ensures **accurate, context-aware responses** instead of generic AI output.
+
+---
+
+## The Stack
+
+* **Frontend:** React (Vite)
+* **Styling:** Tailwind CSS + Glassmorphism UI
+* **AI Engine:** Google Gemini API (`gemini-3.1-flash-lite-preview`)
+* **State Management:** React Context API + Hooks
+
+---
+
+## Quick Start
+
+```bash
+git clone https://github.com/Princy-y/FlowSync_AI.git
+cd FlowSync_AI
+npm install
