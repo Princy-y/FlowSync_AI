@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useStadiumData } from '../context/StadiumContext';
 import { Send, Bot, User, Sparkles, Command, Loader2, ChevronDown, Target, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { askFlowSyncAI } from '../logic/geminiApi';
+import { streamFlowSyncAI } from '../logic/geminiApi';
 
 // ─── Language config ─────────────────────────────────────────────────────────
 const LANGUAGES = [
@@ -282,43 +282,85 @@ const ModeBadge = ({ mode }) => {
 };
 
 // ─── Main component ───────────────────────────────────────────────────────────
+// Max characters allowed in a single chat message
+const MAX_MESSAGE_LENGTH = 400;
+
+/**
+ * Sanitizes user chat input: strips leading/trailing whitespace,
+ * collapses consecutive whitespace, and enforces a character limit.
+ */
+function sanitizeInput(raw) {
+  return raw.trim().replace(/\s+/g, ' ').slice(0, MAX_MESSAGE_LENGTH);
+}
+
 export const FlowSyncAssistant = () => {
-  const { messages, addUserMessage, addAssistantMessage, crowdData, votes, activePerk } = useStadiumData();
+  const { messages, addUserMessage, addAssistantMessage, crowdData, votes, activePerk, language, setLanguage } = useStadiumData();
   const [inputValue,  setInputValue ] = useState('');
   const [isThinking,  setIsThinking ] = useState(false);
   const [smartMode,   setSmartMode  ] = useState('fastest');
-  const [language,    setLanguage   ] = useState('English');
-  const scrollRef = useRef(null);
+  // 'language' and 'setLanguage' now come from StadiumContext — shared with Settings panel
+  const scrollRef    = useRef(null);
+  /** Holds the latest assistant message for the aria-live announcer */
+  const [liveAnnounce, setLiveAnnounce] = useState('');
+  /**
+   * Rate limiting — tracks timestamp of the last completed AI response.
+   * Enforces a 3-second cooldown between submissions to prevent API bursts.
+   */
+  const lastResponseRef = useRef(0);
+  const COOLDOWN_MS = 3000;
+  /** Real-time streaming text — shown as an in-progress message bubble */
+  const [streamingText, setStreamingText] = useState('');
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, isThinking]);
+  }, [messages, isThinking, streamingText]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!inputValue.trim()) return;
+    const sanitized = sanitizeInput(inputValue);
+    if (!sanitized) return;
 
-    const userMessage = inputValue;
-    addUserMessage(userMessage, { mode: smartMode });
+    // Rate limiting: enforce cooldown between submissions
+    const now = Date.now();
+    if (now - lastResponseRef.current < COOLDOWN_MS) return;
+
+    addUserMessage(sanitized, { mode: smartMode });
     setInputValue('');
-
+    setStreamingText('');
     setIsThinking(true);
-    // Silently append language instruction before sending to Gemini
-    const localizedMessage = language !== 'English'
-      ? `${userMessage} [SYSTEM INSTRUCTION: You must provide your entire response in ${language}.]`
-      : userMessage;
-    const response = await askFlowSyncAI(localizedMessage, crowdData, votes, smartMode, activePerk);
-    setIsThinking(false);
 
+    // Stream the AI response — update streamingText chunk-by-chunk
+    const response = await streamFlowSyncAI(
+      sanitized, crowdData, votes, smartMode, activePerk, language,
+      (_chunk, fullText) => {
+        setStreamingText(fullText);
+        setIsThinking(false); // hide spinner once first chunk arrives
+      }
+    );
+
+    setStreamingText('');
+    lastResponseRef.current = Date.now();
+    setIsThinking(false);
     addAssistantMessage(response);
+    setLiveAnnounce(response);
   };
 
   const currentMode = SMART_MODES.find(m => m.key === smartMode) ?? SMART_MODES[0];
 
   return (
-    <div className="flex flex-col h-full glass-panel bg-slate-900/60 border-slate-700/50">
+    <div className="flex flex-col h-full glass-panel bg-slate-900/60 border-slate-700/50" role="region" aria-label="FlowSync AI Chat Assistant">
+      {/* Screen-reader live region — announces new AI responses */}
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        key={liveAnnounce}
+      >
+        {liveAnnounce}
+      </div>
 
       {/* ── Header ── */}
       <div className="p-6 border-b border-white/5 bg-slate-950/20 backdrop-blur-md space-y-3">
@@ -407,7 +449,29 @@ export const FlowSyncAssistant = () => {
             </motion.div>
           ))}
 
-          {isThinking && (
+          {/* ── Streaming message bubble (word-by-word real-time output) ── */}
+          {streamingText && (
+            <motion.div
+              key="streaming"
+              initial={{ opacity: 0, x: -20, y: 10 }}
+              animate={{ opacity: 1, x: 0, y: 0 }}
+              className="flex justify-start items-start gap-3"
+              aria-live="polite"
+              aria-label="AI is responding"
+            >
+              <div className="w-8 h-8 rounded-full bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center shrink-0 mt-1">
+                <Bot size={14} className="text-indigo-400" />
+              </div>
+              <div className="max-w-[85%] px-5 py-4 rounded-3xl bg-slate-800/60 border border-violet-500/30 text-slate-100 rounded-tl-sm">
+                <MarkdownMessage text={streamingText} />
+                {/* Blinking cursor to indicate streaming in progress */}
+                <span className="inline-block w-0.5 h-3.5 bg-indigo-400 ml-0.5 animate-pulse align-middle" aria-hidden="true" />
+              </div>
+            </motion.div>
+          )}
+
+          {/* ── Thinking spinner (shown before first chunk arrives) ── */}
+          {isThinking && !streamingText && (
             <motion.div
               key="thinking"
               initial={{ opacity: 0, x: -20, y: 10 }}
@@ -425,12 +489,13 @@ export const FlowSyncAssistant = () => {
               </div>
             </motion.div>
           )}
+
         </AnimatePresence>
       </div>
 
       {/* ── Input ── */}
       <div className="p-6 bg-slate-950/40 backdrop-blur-xl border-t border-white/5">
-        <form onSubmit={handleSubmit} className="relative group">
+        <form onSubmit={handleSubmit} className="relative group" role="search" aria-label="Send message to FlowSync AI">
           <input
             type="text"
             id="flowsync-chat-input"
@@ -438,11 +503,20 @@ export const FlowSyncAssistant = () => {
             onChange={(e) => setInputValue(e.target.value)}
             placeholder={`Ask FlowSync (${currentMode.label} mode)...`}
             disabled={isThinking}
+            maxLength={MAX_MESSAGE_LENGTH}
+            aria-label={`Message FlowSync AI in ${currentMode.label} mode`}
+            aria-describedby="chat-char-count"
             className="w-full bg-slate-900/80 border border-slate-700/80 text-white pl-5 pr-14 py-4 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/40 focus:border-indigo-500/60 transition-all placeholder:text-slate-500 placeholder:text-sm text-sm disabled:opacity-50"
           />
+          {inputValue.length > 350 && (
+            <span id="chat-char-count" className="absolute -top-5 right-0 text-[10px] text-yellow-400 font-bold">
+              {MAX_MESSAGE_LENGTH - inputValue.length} chars left
+            </span>
+          )}
           <button
             id="flowsync-send-btn"
             type="submit"
+            aria-label="Send message"
             className="absolute right-3 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl transition-all shadow-lg shadow-indigo-600/20 active:scale-95 disabled:opacity-50"
             disabled={!inputValue.trim() || isThinking}
           >

@@ -1,6 +1,23 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getConfidence } from '../context/StadiumContext';
 
+// ─── Singleton Gemini client ──────────────────────────────────────────────────
+// Instantiated once at module level to avoid re-initialising the SDK on every
+// call. The model reference is also cached — avoids redundant object creation.
+let _genAI = null;
+let _model = null;
+
+function getModel() {
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!apiKey) return null;
+  if (!_genAI) {
+    _genAI = new GoogleGenerativeAI(apiKey);
+    // gemini-2.0-flash: fast, low-latency, production-ready Gemini model
+    _model = _genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  }
+  return _model;
+}
+
 // ─── Smart Mode definitions ───────────────────────────────────────────────────
 /**
  * Rules injected into the AI prompt for each Smart Mode.
@@ -52,6 +69,23 @@ function buildModeBlock(mode) {
       3. Personalise the recommendation specifically for the "${mode}" user type.
       4. Open with the recommended gate/exit name directly.
   `;
+}
+
+// ─── Prompt injection sanitiser ───────────────────────────────────────────────
+/**
+ * sanitizeForPrompt — removes characters commonly used in prompt injection attacks
+ * before the user message is interpolated into the system prompt.
+ * Strips: backticks, angle brackets, and common injection phrases.
+ *
+ * @param {string} raw — raw user input (already length-limited by the UI)
+ * @returns {string} sanitized string safe for system prompt interpolation
+ */
+function sanitizeForPrompt(raw) {
+  return raw
+    .replace(/[`<>]/g, '')                                  // strip code-fence & HTML chars
+    .replace(/ignore\s+(previous|all|above)\s+instructions?/gi, '') // neutralize injection phrases
+    .replace(/system\s*prompt/gi, '')                       // neutralize "system prompt" references
+    .trim();
 }
 
 // ─── Vote formatter ───────────────────────────────────────────────────────────
@@ -125,12 +159,14 @@ function analyzeVotes(votes) {
  *   - User crowd vote aggregations (with confidence tiers)
  *   - Smart Mode personalisation
  *   - Active vendor perk incentive (when triggered)
+ *   - Prompt injection protection on user input
  *
  * @param {string}  userMessage
  * @param {object}  currentStadiumData
  * @param {object}  [votes]       — optional voting data from StadiumContext
  * @param {string}  [smartMode]   — one of fastest | family | group | elderly
  * @param {object}  [activePerk]  — perk object from vendorPerks.js (or null)
+ * @param {string}  [language]    — response language
  */
 export async function askFlowSyncAI(
   userMessage,
@@ -138,15 +174,16 @@ export async function askFlowSyncAI(
   votes      = {},
   smartMode  = 'fastest',
   activePerk = null,
+  language   = 'English',
 ) {
   try {
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!apiKey) {
+    const model = getModel();
+    if (!model) {
       return "Error: API Key is missing. Please check your .env file.";
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-3.1-flash-lite-preview" });
+    // Sanitize user input before prompt interpolation (prompt injection defense)
+    const safeUserMessage = sanitizeForPrompt(userMessage);
 
     const { block: votingBlock, clearZones, crowdedZones, hasAnyVotes } = analyzeVotes(votes);
     const modeBlock = buildModeBlock(smartMode);
@@ -166,7 +203,6 @@ export async function askFlowSyncAI(
     if (!hasAnyVotes) {
       priorityRules = '- No user votes submitted yet. Base all advice on sensor data only.';
     } else {
-      // Split clear zones by confidence tier for targeted AI instructions
       const highConfClear   = clearZones.filter(z => z.conf.tier === 3);
       const lowConfClear    = clearZones.filter(z => z.conf.tier === 1);
       const highConfCrowded = crowdedZones.filter(z => z.conf.tier === 3);
@@ -176,46 +212,54 @@ export async function askFlowSyncAI(
       - ALWAYS mention confidence level when discussing a zone: e.g., "confidence is low" or "high confidence reports indicate".
       - Cross-reference sensor trends with vote consensus for maximum accuracy.`;
 
-      // High-confidence clear zones — AI should speak with certainty
       if (highConfClear.length > 0) {
         const zoneList = highConfClear.map(z => `${z.id.toUpperCase()} (${z.pct}% clear, ${z.conf.label} confidence)`).join(', ');
-        priorityRules += `
-      - HIGH CONFIDENCE CLEAR ZONES: ${zoneList}.
-        For these, respond with confident routing advice:
-        "Based on live reports, [zone] currently offers smooth movement and is a recommended area."
-        Emphasise these as Community Verified Best Routes.`;
+        priorityRules += `\n      - HIGH CONFIDENCE CLEAR ZONES: ${zoneList}.\n        Respond with confident routing: "Based on live reports, [zone] currently offers smooth movement."\n        Emphasise these as Community Verified Best Routes.`;
       }
-
-      // Low-confidence clear zones — AI should express caution
       if (lowConfClear.length > 0) {
-        const zoneList = lowConfClear.map(z => `${z.id.toUpperCase()} (${z.pct}% clear, ${z.conf.label} confidence — only ${z.conf.label === 'Low' ? '<5' : '5-20'} reports)`).join(', ');
-        priorityRules += `
-      - LOW CONFIDENCE CLEAR ZONES: ${zoneList}.
-        Mention uncertainty explicitly, e.g.:
-        "[zone] appears clear, but confidence is low due to limited reports. Proceed with caution."
-        Do NOT mark these as verified best routes.`;
+        const zoneList = lowConfClear.map(z => `${z.id.toUpperCase()} (${z.pct}% clear, ${z.conf.label} confidence)`).join(', ');
+        priorityRules += `\n      - LOW CONFIDENCE CLEAR ZONES: ${zoneList}.\n        Add caution: "[zone] appears clear, but confidence is low due to limited reports."`;
       }
-
-      // High-confidence crowded zones — AI should strongly caution
       if (highConfCrowded.length > 0) {
         const zoneList = highConfCrowded.map(z => `${z.id.toUpperCase()} (${z.pct}% crowded, ${z.conf.label} confidence)`).join(', ');
-        priorityRules += `
-      - HIGH CONFIDENCE CROWDED ZONES: ${zoneList}.
-        Strongly advise against routing. Use:
-        "[zone] shows consistent congestion based on high-confidence user reports. Avoid if possible."`;
+        priorityRules += `\n      - HIGH CONFIDENCE CROWDED ZONES: ${zoneList}.\n        Strongly advise against routing.`;
       }
-
-      // Remaining crowded zones (lower confidence)
       const lowConfCrowded = crowdedZones.filter(z => z.conf.tier < 3);
       if (lowConfCrowded.length > 0) {
         const zoneList = lowConfCrowded.map(z => `${z.id.toUpperCase()} (${z.pct}% crowded, ${z.conf.label} confidence)`).join(', ');
-        priorityRules += `
-      - CROWDED ZONES (lower confidence): ${zoneList}.
-        Advise caution and mention that data is still accumulating.`;
+        priorityRules += `\n      - CROWDED ZONES (lower confidence): ${zoneList}.\n        Advise caution and mention that data is still accumulating.`;
       }
     }
 
-    const systemPrompt = `
+    const systemPrompt = buildSystemPrompt({
+      safeUserMessage, language, modeBlock, perkBlock,
+      currentStadiumData, votingBlock, priorityRules,
+    });
+
+    const result = await model.generateContent(systemPrompt);
+    return result.response.text();
+  } catch (error) {
+    console.error("Gemini API Error:", error);
+    const msg = error?.message ?? '';
+    if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
+      return "Error: Invalid Gemini API key. Please check your .env configuration.";
+    }
+    if (msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
+      return "Error: Gemini API quota exceeded. Please try again later.";
+    }
+    if (msg.includes('SAFETY')) {
+      return "I'm unable to respond to that query due to safety filters. Please rephrase your question.";
+    }
+    return `Error: Unable to connect to FlowSync Predictive Engine. ${msg}`;
+  }
+}
+
+// ─── Shared prompt builder (used by both ask and stream) ──────────────────────
+function buildSystemPrompt({ safeUserMessage, language, modeBlock, perkBlock, currentStadiumData, votingBlock, priorityRules }) {
+  return `
+[LANGUAGE OVERRIDE — HIGHEST PRIORITY]
+You MUST write your entire response in ${language}. Every word, sentence, and punctuation must be in ${language}. Do NOT use English in your response unless ${language} itself is English. This overrides all other instructions.
+
       You are FlowSync AI, a strategic stadium crowd management intelligence system.
       You help operators and attendees navigate safely by synthesizing sensor data with live user reports.
 
@@ -236,18 +280,70 @@ export async function askFlowSyncAI(
       - When recommending an exit or gate, always state WHY using the combined data.
       - ALWAYS explicitly state confidence level when citing vote data.
       - If a VENDOR PERK is active, naturally mention it in your recommendation (1 sentence max).
-      - If reporting a HIGH-confidence clear area: use an encouraging, confident tone.
-      - If reporting a LOW-confidence clear area: add a caution note about limited reports.
-      - If reporting congestion: be direct and suggest specific alternatives.
 
       === USER QUERY ===
-      "${userMessage}"
+      "${safeUserMessage}"
     `;
+}
 
-    const result = await model.generateContent(systemPrompt);
-    return result.response.text();
+// ─── Streaming API call ────────────────────────────────────────────────────────
+/**
+ * streamFlowSyncAI — streams the Gemini response word-by-word using
+ * generateContentStream(). Use this for real-time UI streaming.
+ *
+ * @param {string}   userMessage
+ * @param {object}   currentStadiumData
+ * @param {object}   [votes]
+ * @param {string}   [smartMode]
+ * @param {object}   [activePerk]
+ * @param {string}   [language]
+ * @param {Function} onChunk  — callback(chunkText: string, fullText: string)
+ * @returns {Promise<string>} — full assembled response text
+ */
+export async function streamFlowSyncAI(
+  userMessage,
+  currentStadiumData,
+  votes      = {},
+  smartMode  = 'fastest',
+  activePerk = null,
+  language   = 'English',
+  onChunk    = null,
+) {
+  try {
+    const model = getModel();
+    if (!model) return "Error: API Key is missing. Please check your .env file.";
+
+    const safeUserMessage                            = sanitizeForPrompt(userMessage);
+    const { block: votingBlock, clearZones,
+            crowdedZones, hasAnyVotes }              = analyzeVotes(votes);
+    const modeBlock                                  = buildModeBlock(smartMode);
+    const perkBlock = activePerk?.active
+      ? `=== VENDOR PERK (ACTIVE) ===\n${activePerk.aiContext}` : '';
+
+    let priorityRules = hasAnyVotes
+      ? '- User votes available. Cross-reference with sensor data for accuracy.'
+      : '- No user votes yet. Base all advice on sensor data only.';
+
+    const systemPrompt = buildSystemPrompt({
+      safeUserMessage, language, modeBlock, perkBlock,
+      currentStadiumData, votingBlock, priorityRules,
+    });
+
+    const result = await model.generateContentStream(systemPrompt);
+
+    let fullText = '';
+    for await (const chunk of result.stream) {
+      const chunkText = chunk.text();
+      fullText += chunkText;
+      onChunk?.(chunkText, fullText);
+    }
+    return fullText;
+
   } catch (error) {
-    console.error("Gemini API Error:", error);
-    return `Error: ${error.message || "Unable to connect to FlowSync Predictive Engine."}`;
+    console.error("Gemini Stream Error:", error);
+    const msg = error?.message ?? '';
+    if (msg.includes('API_KEY_INVALID')) return "Error: Invalid API key.";
+    if (msg.includes('RESOURCE_EXHAUSTED')) return "Error: API quota exceeded.";
+    return `Error: Streaming failed. ${msg}`;
   }
 }

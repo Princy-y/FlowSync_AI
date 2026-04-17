@@ -298,6 +298,36 @@ const SmartStrategyPanelComponent = () => {
    */
   const activeExit = rerouteActive && rerouteExit ? rerouteExit : sensorExit;
 
+  /**
+   * bestDepartureWindow — dynamically derived from live crowd trend data.
+   * Analyses all exit trends to determine the smartest departure advice:
+   *   - If exits are decreasing/stable and density < 50%: leave now
+   *   - If exits are stable but density 50-70%: wait 5 min
+   *   - If exits are increasing or density > 70%: wait 10-15 min
+   */
+  const bestDepartureWindow = useMemo(() => {
+    const exits = Object.entries(crowdData).filter(([k]) => k.startsWith('exit'));
+    if (!exits.length) return { label: 'T+15 Minutes', sub: 'Post-Rush', color: 'text-yellow-400' };
+
+    const avgDensity = exits.reduce((sum, [, d]) => sum + d.density, 0) / exits.length;
+    const anyIncreasing = exits.some(([, d]) => d.trend === 'increasing');
+    const allDecreasing = exits.every(([, d]) => d.trend === 'decreasing');
+
+    if (avgDensity < 0.35 && !anyIncreasing) {
+      return { label: 'Leave Now',      sub: 'Low congestion detected', color: 'text-emerald-400' };
+    }
+    if (avgDensity < 0.55 && allDecreasing) {
+      return { label: 'T+5 Minutes',    sub: 'Crowd clearing — brief wait', color: 'text-emerald-400' };
+    }
+    if (avgDensity < 0.70 && !anyIncreasing) {
+      return { label: 'T+5 Minutes',    sub: 'Moderate flow — short hold', color: 'text-yellow-400' };
+    }
+    if (anyIncreasing && avgDensity > 0.70) {
+      return { label: 'T+15 Minutes',   sub: 'Peak rush — wait it out',   color: 'text-red-400' };
+    }
+    return { label: 'T+10 Minutes',   sub: 'Post-Rush window',           color: 'text-yellow-400' };
+  }, [crowdData]);
+
   /** Live exit density chips */
   const exitReadouts = useMemo(() => {
     return Object.entries(crowdData)
@@ -549,7 +579,7 @@ const SmartStrategyPanelComponent = () => {
           </AnimatePresence>
         </motion.div>
 
-        {/* ── Best Departure Window ── */}
+        {/* ── Best Departure Window (Dynamic) ── */}
         <motion.div
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -559,11 +589,20 @@ const SmartStrategyPanelComponent = () => {
           <span className="text-[10px] uppercase tracking-widest text-slate-400 font-bold block mb-2">
             Best Departure Window
           </span>
-          <div className="text-lg font-bold flex items-center gap-3 text-slate-200">
-            <Clock className="text-yellow-400 shrink-0" size={20} />
-            T+15 Minutes{' '}
-            <span className="opacity-50 font-medium text-xs">(Post-Rush)</span>
-          </div>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={bestDepartureWindow.label}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.3 }}
+              className="text-lg font-bold flex items-center gap-3 text-slate-200"
+            >
+              <Clock className={`shrink-0 ${bestDepartureWindow.color}`} size={20} />
+              <span className={bestDepartureWindow.color}>{bestDepartureWindow.label}</span>
+              <span className="opacity-50 font-medium text-xs">({bestDepartureWindow.sub})</span>
+            </motion.div>
+          </AnimatePresence>
         </motion.div>
 
         {/* ── What-If Simulation Engine ── */}

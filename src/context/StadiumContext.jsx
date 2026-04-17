@@ -91,6 +91,9 @@ export const StadiumProvider = memo(({ children }) => {
   // ── Track which locations a user has already voted on (anti-spam) ──────────
   const [votedLocations, setVotedLocations] = useState(new Set());
 
+  // ── Shared language preference — syncs Settings panel ↔ AI assistant ──────
+  const [language, setLanguage] = useState('English');
+
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -206,6 +209,8 @@ export const StadiumProvider = memo(({ children }) => {
     addUserMessage,
     addAssistantMessage,
     activePerk,
+    language,
+    setLanguage,
   };
 
   return <StadiumContext.Provider value={value}>{children}</StadiumContext.Provider>;

@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, lazy, Suspense } from 'react';
 import { LiveCommandCenter } from './components/LiveCommandCenter';
 import { FlowSyncAssistant } from './components/FlowSyncAssistant';
 import { useStadiumData } from './context/StadiumContext';
 import {
   LayoutDashboard, Users, Map, Settings, Search, Bell, Menu, X,
-  ChevronRight, AlertTriangle, Tag, Zap, ToggleLeft, ToggleRight, Globe
+  ChevronRight, AlertTriangle, Tag, Zap, ToggleLeft, ToggleRight, Globe, Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -292,7 +292,10 @@ const SettingsPanel = () => {
 
 // ─── Overlay Panel Shell ───────────────────────────────────────────────────────
 const OverlayPanel = ({ panelKey, onClose }) => {
-  const config = PANELS[panelKey];
+  const config   = PANELS[panelKey];
+  const panelRef = useRef(null);
+  const closeRef = useRef(null);
+
   if (!config) return null;
 
   const contentMap = {
@@ -303,8 +306,43 @@ const OverlayPanel = ({ panelKey, onClose }) => {
     settings: <SettingsPanel />,
   };
 
+  // Auto-focus close button when panel opens (WCAG focus management)
+  useEffect(() => { closeRef.current?.focus(); }, []);
+
+  // Close on Escape key (WCAG 2.1 SC 2.1.2)
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  // Focus trap — keep Tab / Shift+Tab cycling inside the panel
+  useEffect(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    const focusable = el.querySelectorAll(
+      'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    );
+    const first = focusable[0];
+    const last  = focusable[focusable.length - 1];
+    const trap  = (e) => {
+      if (e.key !== 'Tab') return;
+      if (e.shiftKey) {
+        if (document.activeElement === first) { e.preventDefault(); last?.focus(); }
+      } else {
+        if (document.activeElement === last)  { e.preventDefault(); first?.focus(); }
+      }
+    };
+    el.addEventListener('keydown', trap);
+    return () => el.removeEventListener('keydown', trap);
+  }, []);
+
   return (
     <motion.div
+      ref={panelRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={config.label}
       initial={{ opacity: 0, x: -20 }}
       animate={{ opacity: 1, x: 0   }}
       exit={{    opacity: 0, x: -20  }}
@@ -322,7 +360,9 @@ const OverlayPanel = ({ panelKey, onClose }) => {
           <span className="text-sm font-black text-white uppercase tracking-wider">{config.label}</span>
         </div>
         <button
+          ref={closeRef}
           onClick={onClose}
+          aria-label={`Close ${config.label} panel`}
           className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800/60 transition-all active:scale-90"
         >
           <X size={16} />
@@ -331,7 +371,14 @@ const OverlayPanel = ({ panelKey, onClose }) => {
 
       {/* Panel body */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
-        {contentMap[panelKey]}
+        <Suspense fallback={
+          <div className="flex items-center justify-center h-32 gap-2 text-slate-400">
+            <Loader2 size={16} className="animate-spin" />
+            <span className="text-sm">Loading panel...</span>
+          </div>
+        }>
+          {contentMap[panelKey]}
+        </Suspense>
       </div>
     </motion.div>
   );
@@ -344,6 +391,8 @@ const NavItem = ({ icon, panelKey, activePanel, onClick, active = false, tooltip
     <button
       id={`nav-${panelKey || 'dashboard'}`}
       onClick={onClick}
+      aria-label={tooltip ?? panelKey ?? 'Dashboard'}
+      aria-pressed={isOpen || active}
       className={`p-3 rounded-2xl transition-all duration-200 group relative active:scale-90 ${
         isOpen || active
           ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 shadow-[0_0_12px_rgba(99,102,241,0.2)]'
@@ -357,7 +406,10 @@ const NavItem = ({ icon, panelKey, activePanel, onClick, active = false, tooltip
       )}
       {/* Tooltip */}
       {tooltip && (
-        <div className="absolute left-full ml-4 px-2.5 py-1.5 bg-slate-800 border border-slate-700/60 text-[10px] text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none uppercase font-bold tracking-widest z-50 shadow-xl">
+        <div
+          role="tooltip"
+          className="absolute left-full ml-4 px-2.5 py-1.5 bg-slate-800 border border-slate-700/60 text-[10px] text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none uppercase font-bold tracking-widest z-50 shadow-xl"
+        >
           {tooltip}
           <ChevronRight size={10} className="inline ml-1 opacity-50" />
         </div>
@@ -369,8 +421,25 @@ const NavItem = ({ icon, panelKey, activePanel, onClick, active = false, tooltip
 // ─── App ───────────────────────────────────────────────────────────────────────
 function App() {
   const [activePanel, setActivePanel] = useState(null);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  // Stores the element that triggered the panel so focus can be restored on close
+  const triggerRef = useRef(null);
 
-  const togglePanel = (key) => setActivePanel(prev => prev === key ? null : key);
+  const togglePanel = useCallback((key, triggerEl) => {
+    setActivePanel(prev => {
+      if (prev === key) {
+        setTimeout(() => triggerEl?.focus(), 50);
+        return null;
+      }
+      triggerRef.current = triggerEl ?? null;
+      return key;
+    });
+  }, []);
+
+  const closePanel = useCallback(() => {
+    setActivePanel(null);
+    setTimeout(() => triggerRef.current?.focus(), 50);
+  }, []);
 
   return (
     <div className="flex h-screen w-full bg-[#020617] text-slate-100 overflow-hidden font-inter">
@@ -394,12 +463,19 @@ function App() {
       </aside>
 
       {/* ── Main ── */}
-      <main className="flex-1 flex flex-col min-w-0">
+      <main id="main-content" className="flex-1 flex flex-col min-w-0" aria-label="Stadium dashboard">
 
         {/* Header */}
         <header className="h-20 flex items-center justify-between px-8 bg-slate-950/40 backdrop-blur-md border-b border-white/5 shrink-0 relative z-10">
           <div className="flex items-center gap-4">
-            <button className="lg:hidden p-2 text-slate-400 hover:text-white transition-colors">
+            <button
+              id="mobile-menu-btn"
+              aria-label="Open navigation menu"
+              aria-expanded={mobileSidebarOpen}
+              aria-controls="mobile-sidebar"
+              className="lg:hidden p-2 text-slate-400 hover:text-white transition-colors"
+              onClick={() => setMobileSidebarOpen(o => !o)}
+            >
               <Menu size={24} />
             </button>
             <div className="flex flex-col">
@@ -446,13 +522,52 @@ function App() {
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-30 bg-black/20 backdrop-blur-[2px]"
-                  onClick={() => setActivePanel(null)}
+                  onClick={closePanel}
+                  aria-hidden="true"
                 />
                 <OverlayPanel
                   key="panel"
                   panelKey={activePanel}
-                  onClose={() => setActivePanel(null)}
+                  onClose={closePanel}
                 />
+              </>
+            )}
+          </AnimatePresence>
+
+          {/* Mobile sidebar drawer */}
+          <AnimatePresence>
+            {mobileSidebarOpen && (
+              <>
+                <motion.div
+                  key="mobile-backdrop"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="fixed inset-0 z-50 bg-black/50 lg:hidden"
+                  onClick={() => setMobileSidebarOpen(false)}
+                  aria-hidden="true"
+                />
+                <motion.aside
+                  id="mobile-sidebar"
+                  key="mobile-sidebar"
+                  initial={{ x: -80, opacity: 0 }}
+                  animate={{ x: 0,   opacity: 1 }}
+                  exit={{    x: -80, opacity: 0 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                  aria-label="Mobile navigation"
+                  className="fixed top-0 left-0 h-full w-20 z-50 flex flex-col items-center py-8 bg-slate-950 border-r border-slate-800/80 lg:hidden"
+                >
+                  <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center mb-10 shadow-lg shadow-indigo-600/30">
+                    <Map size={24} className="text-white" />
+                  </div>
+                  <nav className="flex flex-col gap-6 flex-1">
+                    <NavItem icon={<LayoutDashboard size={20} />} active tooltip="Dashboard" />
+                    <NavItem icon={<Users  size={20} />} panelKey="people"   activePanel={activePanel} onClick={() => { togglePanel('people');   setMobileSidebarOpen(false); }} tooltip="Group Sync"   />
+                    <NavItem icon={<Search size={20} />} panelKey="search"   activePanel={activePanel} onClick={() => { togglePanel('search');   setMobileSidebarOpen(false); }} tooltip="Search Gates" />
+                    <NavItem icon={<Bell   size={20} />} panelKey="bell"     activePanel={activePanel} onClick={() => { togglePanel('bell');     setMobileSidebarOpen(false); }} tooltip="Smart Alerts" />
+                  </nav>
+                  <NavItem icon={<Settings size={20} />} panelKey="settings" activePanel={activePanel} onClick={() => { togglePanel('settings'); setMobileSidebarOpen(false); }} tooltip="Settings" />
+                </motion.aside>
               </>
             )}
           </AnimatePresence>
