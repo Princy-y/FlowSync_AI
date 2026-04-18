@@ -1,0 +1,24 @@
+# Keep node_modules out of the Docker build context (speeds up build)
+node_modules
+backend/node_modules
+
+# Git
+.git
+.gitignore
+
+# Local env files — secrets are passed via Cloud Run env vars or build args
+.env
+.env.local
+.env.*.local
+
+# Editor and OS files
+.vscode
+.DS_Store
+*.log
+
+# Test artifacts
+coverage
+
+# Already built (we rebuild inside Docker cleanly)
+dist
+dist-ssr
