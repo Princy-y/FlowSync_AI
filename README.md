@@ -163,3 +163,4 @@ docker run -p 3000:80 -e VITE_GEMINI_API_KEY=your_key flowsync-ai
 
 MIT © Princy y
 =======
+
